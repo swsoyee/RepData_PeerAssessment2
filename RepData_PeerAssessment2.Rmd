@@ -1,0 +1,195 @@
+---
+title: "RepData_PeerAssessment2"
+author: "swsoyee"
+date: "2017-10-14"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## Does severe weather events relates to population health and economy in the U.S?
+
+### Synopsis
+
+In this report we aim to know is there any relation between severe weather events and other property of the U.S such as population health and economy. Our hypothesis is that the severe weather will cause more people get injured and result in economic loss. To investigate this hypothesis, we obtain data form `the U.S. National Oceanic and Atmospheric Administration's (NOAA) storm database`. This database tracks characteristics of major storms and weather events in the United States, including when and where they occur, as well as estimates of any fatalities, injuries, and property damage. From these data, we found that **tornado** is the most harmful with respect to population health, while flood and drought have the greatest economic impacts.
+
+### Check the package installation
+
+At first, we check the environment of analysis has been setup correctly or not.
+
+```{r package installation, message=FALSE}
+libs <- c("plotly", "data.table", "R.utils", "dplyr")
+for (i in libs){
+  if( !is.element(i, .packages(all.available = TRUE)) ) {
+    install.packages(i)
+  }
+  library(i,character.only = TRUE)
+}
+
+sessionInfo()
+```
+
+### Loading the Raw Data
+
+The data for this assignment come in the form of a comma-separated-value file compressed via the bzip2 algorithm to reduce its size. We download the file from the course web site: [Storm Data](https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2) [47Mb]
+
+```{r Download data and unzip, cache=TRUE}
+fileUrl <- "https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2"
+filebz2 <- "StormData.csv.bz2"
+
+# Download and check the data
+if(!file.exists(filebz2)) {
+    download.file(url = fileUrl, destfile = filebz2)
+    if(file.exists(filebz2)) {
+        print(paste(filebz2, "download successed. Read file into R..."))
+    } else {
+        stop("We cannot download the file successfully, please click the url to download the file and save it to your work directory, and rename it to 'StormData.csv.bz2'")
+    }
+} else {
+    print(paste(filebz2, "exsit. Read file into R..."))
+}
+
+# Read the data into R. it will be time consuming.
+if(!file.exists("StormData.csv")) {
+    bunzip2(filebz2, overwrite=T, remove=F)
+}
+
+if (!"stormData" %in% ls()) {
+    stormData <- fread("StormData.csv", header = TRUE, sep = ",")
+}
+
+```
+Warining: I was stuck here for hours. At first I used the `read.data` function to read data into R, but I notice there are many rows contain different type end-of-line(EOL) in the `REMARKS`, and it will make your data in a confusing format. You can not get the correct row in total. So I recommand unzip the .bz2 file and use the `fread` function in package `data.table` to load your data into R.
+
+### Processing the Raw Data
+```{r summary_storm_data}
+dt <- setDT(stormData)
+head(dt)
+summary(dt)
+```
+We need `FATALITIES` and `INJURIES` to calculate the population health, and `PROPDMG`, `PROPDMGEXP`, `CROPDMG` and `CROPDMGEXP` as estimate the economic loss. `PROPDMGEXP` and `CROPDMGEXP` need to be convert to correct formats.
+
+Levels of `PROPDMGEXP` :
+`r unique(dt$PROPDMGEXP)`  
+
+Levels of `CROPDMGEXP` :
+`r unique(dt$CROPDMGEXP)`
+```{r convert}
+# check PROPDMGEXP column
+proLable <- unique(dt$PROPDMGEXP)
+proValue <- c(1000, 1e+06, 1, 1e+09, 1e+06, 0, 1, 1e+05, 1e+06, 0, 10000, 100, 1000, 100, 1e+07, 100, 0, 10, 1e+08)
+names(proValue) <- proLable
+proValue
+
+croLable <- unique(dt$CROPDMGEXP)
+croValue <- c(1, 1e+06, 1000, 1e+06, 1e+09, 0, 1, 1000, 100)
+names(croValue) <- croLable
+croValue
+```
+The convertion is correct.
+
+### Result
+**1. Across the United States, whic types of events are most harmful with respect to population health?** 
+```{r result1}
+# How much events do you want to plot?
+Top <- 25
+
+harmfulEvent <- dt %>% 
+    select(EVTYPE, FATALITIES, INJURIES) %>%
+    group_by(EVTYPE) %>%
+    summarise(FATALITIES = sum(FATALITIES),
+                INJURIES = sum(INJURIES), 
+                   TOTAL = sum(FATALITIES + INJURIES)
+              ) %>%
+    arrange(desc(TOTAL))
+
+# Order the axis
+harmfulEvent$EVTYPE <- factor(harmfulEvent$EVTYPE,
+                              levels = unique(harmfulEvent$EVTYPE)[order(harmfulEvent$TOTAL, decreasing = TRUE)])
+
+# Top n events
+harmfulEventTop <- head(harmfulEvent, n = Top)
+harmfulEventTop
+
+p <- plot_ly(data = harmfulEventTop, 
+                x = ~EVTYPE, 
+                y = ~log2(INJURIES), 
+             type = 'bar', 
+             name = 'INJURIES',
+        hoverinfo = 'x+text',
+             text = paste("Count of Injury:", harmfulEventTop$INJURIES)) %>%
+  add_trace(y = ~log2(FATALITIES), 
+         name = 'FATALITIES',
+    hoverinfo = 'x+text',
+         text = paste("Count of Fatality:", harmfulEventTop$FATALITIES)) %>%
+  layout(title = paste("Top", Top, "most harmful storm events in the the U.S"),
+         yaxis = list(title = 'log2(Count)'), 
+         xaxis = list(title = '', tickangle = -45),
+       barmode = 'stack', 
+        margin = list(b = 130)
+       )
+p
+```
+From the graph the most harmful weather event to population health is `r harmfulEventTop[1, ]$EVTYPE` It has caused the highest fatalities (`r harmfulEventTop[1, ]$FATALITIES`) and the highest injuries (`r harmfulEventTop[1, ]$INJURIES`) across the United States from 1995 to 2011.
+
+**2. Across the United States, which types of events have the greatest economic consequences?**
+```{r result2, cache=TRUE, warning=FALSE}
+# How much events do you want to plot?
+Top <- 10
+
+dtLost <- dt %>% select(EVTYPE, PROPDMG, PROPDMGEXP, CROPDMG, CROPDMGEXP)
+
+# Convert the label to value
+for(type in names(proValue)) {
+    dtLost[dtLost$PROPDMGEXP == type]$PROPDMGEXP <- proValue[type]
+}
+
+for(type in names(croValue)) {
+    dtLost[dtLost$CROPDMGEXP == type]$CROPDMGEXP <- croValue[type]
+}
+# For some reason, when the name is "", it will be convert to NA, so we need to recovert them. 
+dtLost[is.na(dtLost)] <- 1
+
+dtLostSum <- dtLost %>%
+    group_by(EVTYPE) %>%
+    summarise(PROPDMG = sum(PROPDMG*as.numeric(PROPDMGEXP)),
+              CROPDMG = sum(CROPDMG*as.numeric(CROPDMGEXP)),
+              TOTAL = PROPDMG + CROPDMG
+              ) %>%
+    arrange(desc(TOTAL))
+
+# Order the axis
+dtLostSum$EVTYPE <- factor(dtLostSum$EVTYPE,
+                              levels = unique(dtLostSum$EVTYPE)[order(dtLostSum$TOTAL, decreasing = TRUE)])
+
+# Top n events
+dtLostSumTop <- head(dtLostSum, n = Top)
+dtLostSumTop
+
+p2 <- plot_ly(data = dtLostSumTop,
+                 x = ~EVTYPE,
+                 y = ~PROPDMG,
+              type = 'bar',
+              name = 'Propety Damage',
+         hoverinfo = 'x+text',
+              text = paste("Propety Damage:", dtLostSumTop$PROPDMG, "$")) %>%
+  add_trace(y = ~CROPDMG, 
+         name = 'Crops Damage',
+    hoverinfo = 'x+text',
+         text = paste("Crops Damage:", dtLostSumTop$CROPDMG, "$")) %>%
+  layout(title = paste("Top",
+                       Top,
+                       "Events with Greatest Property and Crops Damages in the U.S"
+                       ),
+         yaxis = list(title = 'Economic loss / $'), 
+         xaxis = list(title = '', tickangle = -45),
+       barmode = 'group', 
+        margin = list(b = 130)
+       )
+p2
+
+dtLostSumTop[which.max(dtLostSum$PROPDMG), ]
+dtLostSumTop[which.max(dtLostSum$CROPDMG), ]
+```
+Based on the analysis above, we find that flood cause the most property damage; drought the most crop damage in the United States from 1995 to 2011.
